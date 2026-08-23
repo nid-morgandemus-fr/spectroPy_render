@@ -8,8 +8,6 @@ venv.bak/
 .venv.bak/
 
 # --- Fichiers audio et données de test ---
-sample/
-*.wav
 *.flac
 *.mp3
 *.ogg
@@ -134,7 +132,6 @@ $RECYCLE.BIN/
 .nfs*
 
 # --- Fichiers générés par le programme ---
-*_spectrogram.png
 *_basic.png
 *_advanced.png
 *_fiery.png
@@ -142,8 +139,6 @@ $RECYCLE.BIN/
 *_magma.png
 *_viridis.png
 *_plasma.png
-preview_*.png
-preview_*.jpg
 
 # --- Logs et temporaires ---
 *.log
