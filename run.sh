@@ -13,13 +13,13 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
-PYTHON_SCRIPT="$SCRIPT_DIR/bioacoustics_spectrogram.py"
+PYTHON_SCRIPT="$SCRIPT_DIR/spectroPy_render.py"
 
 echo -e "${BLUE}🎵 spectroPy_render${NC}"
 echo "=========================================="
 
 if [ ! -f "$PYTHON_SCRIPT" ]; then
-    echo -e "${RED}❌ Erreur : bioacoustics_spectrogram.py introuvable dans :${NC}"
+    echo -e "${RED}❌ Erreur : spectroPy_render.py introuvable dans :${NC}"
     echo "   $SCRIPT_DIR"
     exit 1
 fi

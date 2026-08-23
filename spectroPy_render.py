@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-spectroPy_render
-Outil multiplateforme (GUI + CLI) avec apercu interactif, lecture audio et export FFmpeg.
+spectroPy_render.py
+Multiplatform tool (GUI + CLI) with interactive preview, audio playback and FFmpeg export.
 """
 
 import argparse
@@ -10,6 +10,7 @@ import sys
 import subprocess
 import re
 import traceback
+import json
 import numpy as np
 
 try:
@@ -30,27 +31,64 @@ try:
     import librosa.display
     import sounddevice as sd
 except ImportError as e:
-    print(f"Erreur d'importation : {e}")
-    print("Veuillez installer les dependances : pip install PyQt6 matplotlib librosa sounddevice")
+    print(f"Import error: {e}")
+    print("Please install dependencies: pip install PyQt6 matplotlib librosa sounddevice")
     sys.exit(1)
 
+class Translator:
+    def __init__(self, locale_dir, language="fr"):
+        self.locale_dir = locale_dir
+        self.language = language
+        self.translations = {}
+        self.load_language(language)
+    
+    def load_language(self, language):
+        self.language = language
+        lang_file = os.path.join(self.locale_dir, f"{language}.json")
+        
+        if os.path.exists(lang_file):
+            with open(lang_file, 'r', encoding='utf-8') as f:
+                self.translations = json.load(f)
+        else:
+            print(f"Warning: Language file {lang_file} not found. Using defaults.")
+            self.translations = {}
+    
+    def t(self, key, **kwargs):
+        """Translate a key with optional format arguments"""
+        text = self.translations.get(key, key)
+        if kwargs:
+            try:
+                text = text.format(**kwargs)
+            except KeyError:
+                pass
+        return text
+    
+    def get_available_languages(self):
+        """Get list of available languages"""
+        languages = []
+        if os.path.exists(self.locale_dir):
+            for file in os.listdir(self.locale_dir):
+                if file.endswith('.json'):
+                    languages.append(file.replace('.json', ''))
+        return sorted(languages)
 
 PARAMS_CONFIG = {
-    "size": {"label": "Taille (size)", "type": "text", "default": "1920x1080"},
-    "mode": {"label": "Mode d'affichage", "type": "combo", "options": ["combined", "separate"], "default": "combined"},
-    "color": {"label": "Palette de couleurs", "type": "combo",
+    "size": {"label_key": "size", "type": "text", "default": "1920x1080"},
+    "mode": {"label_key": "mode", "type": "combo", "options": ["combined", "separate"], "default": "combined"},
+    "color": {"label_key": "color", "type": "combo",
               "options": ["fiery", "rainbow", "intensity", "magma", "viridis", "cool", "plasma", "green", "blue"],
               "default": "fiery"},
-    "scale": {"label": "Echelle d'intensite", "type": "combo", "options": ["log", "lin", "sqrt", "cbrt"], "default": "log"},
-    "fscale": {"label": "Echelle de frequence", "type": "combo", "options": ["log", "lin"], "default": "log"},
-    "win_func": {"label": "Fenetrag (FFT)", "type": "combo",
+    "scale": {"label_key": "scale", "type": "combo", "options": ["log", "lin", "sqrt", "cbrt"], "default": "log"},
+    "fscale": {"label_key": "fscale", "type": "combo", "options": ["log", "lin"], "default": "log"},
+    "win_func": {"label_key": "win_func", "type": "combo",
                  "options": ["hann", "blackman", "hamming", "rect", "bartlett", "flattop", "welch", "nuttall"],
                  "default": "hann"},
-    "gain": {"label": "Gain", "type": "double_spin", "min": 0.1, "max": 100.0, "step": 0.1, "default": 1.0},
-    "start": {"label": "Frequence min (Hz)", "type": "spin", "min": 0, "max": 192000, "default": 0},
-    "stop": {"label": "Frequence max (Hz)", "type": "spin", "min": 0, "max": 192000, "default": 0},
-    "drange": {"label": "Plage dynamique (dB)", "type": "spin", "min": 10, "max": 200, "default": 120},
-    "legend": {"label": "Afficher la legende", "type": "check", "default": True}
+    "gain": {"label_key": "gain", "type": "double_spin", "min": 0.1, "max": 100.0, "step": 0.1, "default": 1.0},
+    "start": {"label_key": "start", "type": "spin", "min": 0, "max": 192000, "default": 0},
+    "stop": {"label_key": "stop", "type": "spin", "min": 0, "max": 192000, "default": 0},
+    "drange": {"label_key": "drange", "type": "spin", "min": 10, "max": 200, "default": 120},
+    "legend": {"label_key": "legend", "type": "check", "default": True},
+    "preview_duration": {"label_key": "preview_duration", "type": "spin", "min": 5, "max": 600, "default": 60}
 }
 
 COLORMAP_MAP = {
@@ -111,37 +149,38 @@ class FFmpegWorker(QThread):
             returncode = process.wait()
 
             if returncode == 0:
-                self.finished.emit(True, "Spectrogramme FFmpeg genere avec succes !")
+                self.finished.emit(True, "Spectrogram generated successfully!")
             else:
-                self.finished.emit(False, f"FFmpeg a retourne une erreur (code {returncode})")
+                self.finished.emit(False, f"FFmpeg returned error (code {returncode})")
 
         except Exception as e:
-            self.finished.emit(False, f"Erreur:\n{str(e)}")
+            self.finished.emit(False, f"Error:\n{str(e)}")
 
 
 def run_cli(args):
     if not os.path.exists(args.input):
-        print(f"Erreur : Le fichier '{args.input}' n'existe pas.")
+        print(f"Error: File '{args.input}' does not exist.")
         sys.exit(1)
     if not check_ffmpeg():
-        print("Erreur : FFmpeg introuvable.")
+        print("Error: FFmpeg not found.")
         sys.exit(1)
 
     params = {key: getattr(args, key) for key in PARAMS_CONFIG.keys()}
     cmd = build_ffmpeg_cmd(args.input, args.output, params)
-    print(f"Execution : {' '.join(cmd)}")
+    print(f"Execution: {' '.join(cmd)}")
     try:
         subprocess.run(cmd, capture_output=True, text=True, check=True)
-        print(f"Succes : '{args.output}'")
+        print(f"Success: '{args.output}'")
     except subprocess.CalledProcessError as e:
-        print(f"Erreur FFmpeg :\n{e.stderr}")
+        print(f"FFmpeg Error:\n{e.stderr}")
         sys.exit(1)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, cli_args):
+    def __init__(self, cli_args, translator):
         super().__init__()
-        self.setWindowTitle("spectroPy_render")
+        self.translator = translator
+        self.setWindowTitle(self.translator.t("app_title"))
         self.resize(1200, 800)
 
         self.setStyleSheet("""
@@ -161,12 +200,12 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central_widget)
 
         header_layout = QHBoxLayout()
-        title_label = QLabel("spectroPy_render")
+        title_label = QLabel(self.translator.t("header_title"))
         title_label.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
         header_layout.addWidget(title_label)
         header_layout.addStretch()
 
-        self.help_btn = QPushButton("Aide (F1)")
+        self.help_btn = QPushButton(self.translator.t("help_button"))
         self.help_btn.setObjectName("HelpBtn")
         self.help_btn.clicked.connect(self.open_documentation)
         header_layout.addWidget(self.help_btn)
@@ -179,28 +218,28 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 10, 0)
 
-        file_group = QGroupBox("Fichiers et Lecture")
+        file_group = QGroupBox(self.translator.t("file_group_title"))
         file_layout = QFormLayout()
 
         self.input_edit = QLineEdit()
         self.input_edit.setText(cli_args.input if cli_args.input else "")
-        input_browse_btn = QPushButton("Parcourir")
+        input_browse_btn = QPushButton(self.translator.t("browse_button"))
         input_browse_btn.clicked.connect(self.browse_input)
         input_layout = QHBoxLayout()
         input_layout.addWidget(self.input_edit)
         input_layout.addWidget(input_browse_btn)
-        file_layout.addRow("Audio :", input_layout)
+        file_layout.addRow(self.translator.t("audio_label"), input_layout)
 
         self.output_edit = QLineEdit()
         self.output_edit.setText(cli_args.output if cli_args.output else "")
-        output_browse_btn = QPushButton("Parcourir")
+        output_browse_btn = QPushButton(self.translator.t("browse_button"))
         output_browse_btn.clicked.connect(self.browse_output)
         output_layout = QHBoxLayout()
         output_layout.addWidget(self.output_edit)
         output_layout.addWidget(output_browse_btn)
-        file_layout.addRow("Sortie :", output_layout)
+        file_layout.addRow(self.translator.t("output_label"), output_layout)
 
-        self.play_btn = QPushButton("Play")
+        self.play_btn = QPushButton(self.translator.t("play_button"))
         self.play_btn.setStyleSheet(PLAY_STYLE)
         self.play_btn.clicked.connect(self.toggle_playback)
         file_layout.addRow("", self.play_btn)
@@ -247,7 +286,7 @@ class MainWindow(QMainWindow):
                 widget.textChanged.connect(self.schedule_preview_update)
 
             row_layout.addWidget(widget)
-            self.param_layout.addRow(config["label"] + " :", row_layout)
+            self.param_layout.addRow(self.translator.t("params." + config["label_key"]) + " :", row_layout)
 
         scroll_area.setWidget(scroll_widget)
         left_layout.addWidget(scroll_area)
@@ -257,7 +296,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(10, 0, 0, 0)
 
-        preview_group = QGroupBox("Apercu Interactif (Naviguez avec la barre d'outils)")
+        preview_group = QGroupBox(self.translator.t("preview_group_title"))
         preview_layout = QVBoxLayout(preview_group)
 
         self.fig, self.ax = plt.subplots(figsize=(8, 6))
@@ -274,7 +313,7 @@ class MainWindow(QMainWindow):
 
         action_layout = QVBoxLayout()
 
-        self.generate_btn = QPushButton("Generer l'image finale avec FFmpeg")
+        self.generate_btn = QPushButton(self.translator.t("generate_button"))
         self.generate_btn.setObjectName("GenerateBtn")
         self.generate_btn.setMinimumHeight(45)
         self.generate_btn.clicked.connect(self.generate_spectrogram)
@@ -285,7 +324,7 @@ class MainWindow(QMainWindow):
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(100)
-        self.log_edit.append("Pret. Chargez un fichier audio. Appuyez sur F1 pour l'aide.")
+        self.log_edit.append(self.translator.t("ready_message"))
         main_layout.addWidget(self.log_edit)
 
         self.preview_timer = None
@@ -295,9 +334,9 @@ class MainWindow(QMainWindow):
         self.play_stream = None
 
         if not check_ffmpeg():
-            self.log_edit.append("<span style='color:orange;'>FFmpeg introuvable. L'apercu fonctionnera, mais pas l'export final.</span>")
+            self.log_edit.append(f"<span style='color:orange;'>{self.translator.t('ffmpeg_not_found')}</span>")
 
-        self.doc_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "documentation.md")
+        self.doc_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"documentation_{self.translator.language}.md")
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_F1:
@@ -312,14 +351,13 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(
                 self,
-                "Documentation introuvable",
-                f"Le fichier documentation.md est introuvable a :\n{self.doc_path}\n\n"
-                f"Veuillez creer ce fichier avec la documentation complete."
+                self.translator.t("help_not_found_title"),
+                self.translator.t("help_not_found_message", path=self.doc_path)
             )
 
     def browse_input(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Selectionner un fichier audio", "",
-                                                   "Audio Files (*.wav *.flac *.mp3 *.ogg *.aiff);;All Files (*)")
+        file_path, _ = QFileDialog.getOpenFileName(self, self.translator.t("select_audio_title"), "",
+                                                   self.translator.t("audio_files_filter"))
         if file_path:
             self.input_edit.setText(file_path)
             if not self.output_edit.text():
@@ -328,7 +366,8 @@ class MainWindow(QMainWindow):
             self.update_preview()
 
     def browse_output(self):
-        file_path, _ = QFileDialog.getSaveFileName(self, "Enregistrer le spectrogramme", "", "PNG Image (*.png);;All Files (*)")
+        file_path, _ = QFileDialog.getSaveFileName(self, self.translator.t("save_spectrogram_title"), "", 
+                                                   self.translator.t("png_files_filter"))
         if file_path:
             self.output_edit.setText(file_path)
 
@@ -348,7 +387,7 @@ class MainWindow(QMainWindow):
         if not input_file or not os.path.exists(input_file):
             return
 
-        self.log_edit.append("Calcul de l'apercu...")
+        self.log_edit.append(self.translator.t("calculating_preview"))
         QApplication.processEvents()
 
         try:
@@ -364,11 +403,15 @@ class MainWindow(QMainWindow):
             start_freq = self.param_widgets["start"].value()
             stop_freq = self.param_widgets["stop"].value()
             show_legend = self.param_widgets["legend"].isChecked()
+            preview_duration = self.param_widgets["preview_duration"].value()
+
+            if preview_duration > 120:
+                self.log_edit.append(f"<span style='color:orange;'>{self.translator.t('high_duration_warning', duration=preview_duration)}</span>")
 
             fscale_map = {"log": "log", "lin": "linear"}
             fscale_mpl = fscale_map.get(fscale, "log")
 
-            y, sr = librosa.load(input_file, sr=None, duration=60.0, mono=True)
+            y, sr = librosa.load(input_file, sr=None, duration=float(preview_duration), mono=True)
             y = y * gain
 
             n_fft = 2048
@@ -401,20 +444,20 @@ class MainWindow(QMainWindow):
             if stop_freq > 0:
                 self.ax.set_ylim(top=stop_freq)
 
-            self.ax.set(title=f"Apercu (60s) - {os.path.basename(input_file)}",
-                        ylabel="Frequence (Hz)", xlabel="Temps (s)")
+            self.ax.set(title=f"Preview ({preview_duration}s) - {os.path.basename(input_file)}",
+                        ylabel="Frequency (Hz)", xlabel="Time (s)")
 
             if show_legend:
                 fmt = "%+2.0f dB" if scale == "log" else None
-                self.fig.colorbar(img, ax=self.ax, format=fmt, label="Intensite")
+                self.fig.colorbar(img, ax=self.ax, format=fmt, label="Intensity")
 
             self.fig.tight_layout()
             self.canvas.draw()
-            self.log_edit.append("<span style='color:green;'>Apercu mis a jour.</span>")
+            self.log_edit.append(f"<span style='color:green;'>{self.translator.t('preview_updated')}</span>")
 
         except Exception as e:
             error_msg = traceback.format_exc()
-            self.log_edit.append(f"<span style='color:red;'>Erreur apercu : {error_msg}</span>")
+            self.log_edit.append(f"<span style='color:red;'>{self.translator.t('preview_error', error=error_msg)}</span>")
 
     def toggle_playback(self):
         if self.is_playing:
@@ -425,14 +468,14 @@ class MainWindow(QMainWindow):
     def start_playback(self):
         input_file = self.input_edit.text().strip()
         if not input_file or not os.path.exists(input_file):
-            QMessageBox.warning(self, "Erreur", "Veuillez charger un fichier audio.")
+            QMessageBox.warning(self, self.translator.t("error_title"), self.translator.t("no_audio_file"))
             return
 
         try:
             if self.is_playing:
                 self.stop_playback()
 
-            self.log_edit.append("Chargement de l'audio pour lecture...")
+            self.log_edit.append(self.translator.t("loading_audio"))
             QApplication.processEvents()
             self.audio_data, self.audio_sr = librosa.load(input_file, sr=None, mono=False)
 
@@ -446,12 +489,13 @@ class MainWindow(QMainWindow):
 
             self.play_stream = sd.play(audio_to_play, self.audio_sr)
             self.is_playing = True
-            self.play_btn.setText("Stop")
+            self.play_btn.setText(self.translator.t("stop_button"))
             self.play_btn.setStyleSheet(STOP_STYLE)
-            self.log_edit.append("<span style='color:blue;'>Lecture en cours...</span>")
+            self.log_edit.append(f"<span style='color:blue;'>{self.translator.t('playing')}</span>")
 
         except Exception as e:
-            QMessageBox.critical(self, "Erreur de lecture", f"Impossible de lire l'audio :\n{str(e)}")
+            QMessageBox.critical(self, self.translator.t("playback_error_title"), 
+                               self.translator.t("playback_error_message", error=str(e)))
             self.is_playing = False
 
     def stop_playback(self):
@@ -464,25 +508,39 @@ class MainWindow(QMainWindow):
             pass
 
         self.is_playing = False
-        self.play_btn.setText("Play")
+        self.play_btn.setText(self.translator.t("play_button"))
         self.play_btn.setStyleSheet(PLAY_STYLE)
-        self.log_edit.append("<span style='color:blue;'>Lecture arretee.</span>")
+        self.log_edit.append(f"<span style='color:blue;'>{self.translator.t('stopped')}</span>")
 
     def generate_spectrogram(self):
         input_file = self.input_edit.text().strip()
         output_file = self.output_edit.text().strip()
 
         if not input_file or not output_file:
-            QMessageBox.warning(self, "Erreur", "Veuillez specifier les fichiers d'entree et de sortie.")
+            QMessageBox.warning(self, self.translator.t("error_title"), self.translator.t("specify_files_error"))
             return
         if not os.path.exists(input_file):
-            QMessageBox.warning(self, "Erreur", f"Le fichier d'entree n'existe pas :\n{input_file}")
+            QMessageBox.warning(self, self.translator.t("error_title"), 
+                              self.translator.t("input_not_found", path=input_file))
             return
         if not check_ffmpeg():
-            QMessageBox.critical(self, "Erreur", "FFmpeg est requis pour la generation finale.")
+            QMessageBox.critical(self, self.translator.t("error_title"), self.translator.t("ffmpeg_required"))
             return
 
-        self.log_edit.append("<span style='color:orange;'>⏳ Generation FFmpeg en cours... Cela peut prendre du temps selon la duree de l'audio et la resolution. Soyez patient.</span>")
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", input_file],
+                capture_output=True, text=True, check=True
+            )
+            duration = float(result.stdout.strip())
+            minutes = int(duration // 60)
+            secondes = int(duration % 60)
+            duree_texte = f"{minutes}min {secondes}s"
+        except Exception:
+            duree_texte = "unknown"
+
+        self.log_edit.append(f"<span style='color:orange;'>{self.translator.t('generating_ffmpeg', duration=duree_texte)}</span>")
         self.generate_btn.setEnabled(False)
 
         params = {}
@@ -505,11 +563,11 @@ class MainWindow(QMainWindow):
     def on_generation_finished(self, success, message):
         self.generate_btn.setEnabled(True)
         if success:
-            self.log_edit.append(f"<span style='color:green;'>{message}</span>")
-            QMessageBox.information(self, "Succes", message)
+            self.log_edit.append(f"<span style='color:green;'>{self.translator.t('generation_success', message=message)}</span>")
+            QMessageBox.information(self, self.translator.t("success_title"), message)
         else:
-            self.log_edit.append(f"<span style='color:red;'>{message}</span>")
-            QMessageBox.critical(self, "Erreur", message)
+            self.log_edit.append(f"<span style='color:red;'>{self.translator.t('generation_error', message=message)}</span>")
+            QMessageBox.critical(self, self.translator.t("error_title"), message)
 
     def closeEvent(self, event):
         if self.is_playing:
@@ -518,10 +576,11 @@ class MainWindow(QMainWindow):
 
 
 def setup_cli_parser():
-    parser = argparse.ArgumentParser(description="spectroPy_render (GUI + CLI).")
-    parser.add_argument("--gui", action="store_true", help="Forcer le lancement de l'interface graphique")
-    parser.add_argument("-i", "--input", help="Fichier audio d'entree")
-    parser.add_argument("-o", "--output", help="Fichier image de sortie")
+    parser = argparse.ArgumentParser(description="Bioacoustics spectrogram generator (GUI + CLI).")
+    parser.add_argument("--gui", action="store_true", help="Force GUI launch")
+    parser.add_argument("--lang", type=str, default="fr", help="Language: fr or en")
+    parser.add_argument("-i", "--input", help="Input audio file")
+    parser.add_argument("-o", "--output", help="Output image file")
 
     for key, config in PARAMS_CONFIG.items():
         arg_name = f"--{key.replace('_', '-')}"
@@ -541,15 +600,18 @@ def main():
     parser = setup_cli_parser()
     args = parser.parse_args()
 
+    locale_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "locale")
+    translator = Translator(locale_dir, args.lang)
+
     if args.input or args.output:
         if not args.input or not args.output:
-            print("Erreur : Les arguments --input (-i) et --output (-o) sont requis en mode CLI.")
+            print("Error: --input (-i) and --output (-o) are required in CLI mode.")
             sys.exit(1)
         run_cli(args)
     else:
         app = QApplication(sys.argv)
         app.setStyle("Fusion")
-        window = MainWindow(args)
+        window = MainWindow(args, translator)
         window.show()
         sys.exit(app.exec())
 
