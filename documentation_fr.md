@@ -339,5 +339,5 @@ Aide :
 
 **Specifications de sortie** :
 - Format : PNG (24-bit RGB)
-- Resolution max : Limitee par la memoire RAM
+- Resolution max : Limitée par la memoire RAM
 - Espace colorimétrique : sRGB
